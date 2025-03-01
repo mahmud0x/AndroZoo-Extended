@@ -321,7 +321,7 @@ def process_apks_in_parallel(apk_dir: str, apktool_jar: str, result_dir: str):
         logger.info(f"Saved list of failed APKs to {os.path.join(FAILED_APKS_FILE)}")
 
 if __name__ == "__main__":
-    os.system('touch runtime.log') #linux only
+    # os.system('touch runtime.log') #linux only
     parser = argparse.ArgumentParser(description="Process APKs to extract features.")
     parser.add_argument("--input_dir", type=str, help="Directory containing APKs")
     parser.add_argument("--result_dir", type=str, help="Directory to save feature outputs")

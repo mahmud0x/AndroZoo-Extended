@@ -4,10 +4,13 @@ import json
 import subprocess
 import logging
 import multiprocessing
+import argparse
+import shutil
 from xml.dom import minidom
 from typing import List, Dict, Set, Optional
 
 # Setup logging
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -19,7 +22,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # File to store failed APKs
-FAILED_APKS_FILE = "failed_apks.txt"
+FAILED_APKS_FILE = "./failed_apks.txt"
 
 class PScoutMapping:
     def __init__(self):
@@ -196,25 +199,32 @@ class SmaliFeatures:
 
 def decompile_apk(apk_path: str, output_dir: str, apktool_jar: str) -> Optional[str]:
     """Decompile APK using apktool"""
+    # here output_dir parse the original apk filename which is defined in extract_features_from_apk func
     try:
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
-        cmd = f"java -jar {apktool_jar} d {apk_path} -o {output_dir} --force"
+        cmd = f"java -jar {apktool_jar} d {apk_path} -o {output_dir} --force -q"
         subprocess.run(cmd, shell=True, check=True)
         return output_dir
     except Exception as e:
         logger.error(f"Failed to decompile APK {apk_path}: {e}")
         return None
 
-def extract_features_from_apk(apk_path: str, apktool_jar: str) -> Optional[List[str]]:
+def extract_features_from_apk(apk_path: str, apktool_jar: str, result_dir: str) -> Optional[List[str]]:
     """Extract features from an APK file and format the output as specified"""
-    output_dir = decompile_apk(apk_path, f"./decompiled/{os.path.basename(apk_path)}", apktool_jar)
+    # output_dir = decompile_apk(apk_path, os.path.join(output_dir, os.path.splitext(os.path.basename(apk_path))[0]), apktool_jar)
+    output_dir = decompile_apk(apk_path, f"./decompiled/{os.path.splitext(os.path.basename(apk_path))[0]}", apktool_jar)
+
     if not output_dir:
         return None
 
     SF = SmaliFeatures()
     AndroidManifest = os.path.join(output_dir, "AndroidManifest.xml")
-
+    # print(AndroidManifest)
+    # Copy AndroidManifest.xml to the output directory
+    if os.path.exists(AndroidManifest):
+        shutil.copy(AndroidManifest, os.path.join(result_dir, f"{os.path.splitext(os.path.basename(apk_path))[0]}.xml"))
+    #    print(os.path.join(output_dir, f"{os.path.splitext(os.path.basename(apk_path))[0]}.xml"))
     # Parse AndroidManifest.xml
     if os.path.exists(AndroidManifest):
         SF.parse_manifest(AndroidManifest)
@@ -263,17 +273,16 @@ def extract_features_from_apk(apk_path: str, apktool_jar: str) -> Optional[List[
     for url in SF.network_address:
         output.append(f"URLDomainList_{url}")
 
-
     return output
 
-def process_apk(apk_path: str, apktool_jar: str, output_dir: str) -> Optional[str]:
+def process_apk(apk_path: str, apktool_jar: str, result_dir: str) -> Optional[str]:
     """Wrapper function to process a single APK."""
     try:
         logger.info(f"Processing APK: {apk_path}")
-        features = extract_features_from_apk(apk_path, apktool_jar)
+        features = extract_features_from_apk(apk_path, apktool_jar, result_dir)
         if features:
             # Save features to a .data file
-            output_file = os.path.join(output_dir, f"{os.path.splitext(os.path.basename(apk_path))[0]}.data")
+            output_file = os.path.join(result_dir, f"{os.path.splitext(os.path.basename(apk_path))[0]}.data")
             with open(output_file, 'w') as f:
                 for line in features:
                     f.write(f"{line}\n")
@@ -286,7 +295,7 @@ def process_apk(apk_path: str, apktool_jar: str, output_dir: str) -> Optional[st
         logger.error(f"Error processing APK {apk_path}: {e}")
         return None
 
-def process_apks_in_parallel(apk_dir: str, apktool_jar: str, output_dir: str):
+def process_apks_in_parallel(apk_dir: str, apktool_jar: str, result_dir: str):
     """Process all APKs in a directory in parallel."""
     apk_files = [os.path.join(apk_dir, f) for f in os.listdir(apk_dir) if f.endswith(".apk")]
     if not apk_files:
@@ -294,26 +303,29 @@ def process_apks_in_parallel(apk_dir: str, apktool_jar: str, output_dir: str):
         return
 
     # Create output directory if it doesn't exist
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
+    if not os.path.exists(result_dir):
+        os.makedirs(result_dir)
 
     # Process APKs in parallel
     with multiprocessing.Pool() as pool:
-        results = pool.starmap(process_apk, [(apk, apktool_jar, output_dir) for apk in apk_files])
+        results = pool.starmap(process_apk, [(apk, apktool_jar, result_dir) for apk in apk_files])
 
     # Track failed APKs
     failed_apks = [os.path.splitext(os.path.basename(apk_files[i]))[0] for i, result in enumerate(results) if result is None]
 
     # Save failed APKs to a file
     if failed_apks:
-        with open(FAILED_APKS_FILE, 'w') as f:
+        with open(os.path.join(FAILED_APKS_FILE), 'w') as f:
             for apk in failed_apks:
                 f.write(f"{apk}\n")
-        logger.info(f"Saved list of failed APKs to {FAILED_APKS_FILE}")
+        logger.info(f"Saved list of failed APKs to {os.path.join(FAILED_APKS_FILE)}")
 
 if __name__ == "__main__":
-    apk_dir = "./data/"  # Directory containing APKs
-    apktool_jar = "apktool.jar"  # Path to apktool.jar
-    output_dir = "./output/"  # Directory to save feature outputs .data
+    os.system('touch runtime.log') #linux only
+    parser = argparse.ArgumentParser(description="Process APKs to extract features.")
+    parser.add_argument("--input_dir", type=str, help="Directory containing APKs")
+    parser.add_argument("--result_dir", type=str, help="Directory to save feature outputs")
+    parser.add_argument("--apktool", type=str, default="./apktool.jar", help="Path to apktool.jar")
+    args = parser.parse_args()
 
-    process_apks_in_parallel(apk_dir, apktool_jar, output_dir)
+    process_apks_in_parallel(args.input_dir, args.apktool, args.result_dir)

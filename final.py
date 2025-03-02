@@ -5,6 +5,7 @@ import subprocess
 import logging
 import multiprocessing
 import argparse
+import tldextract
 import shutil
 from xml.dom import minidom
 from typing import List, Dict, Set, Optional
@@ -76,8 +77,8 @@ class SmaliFeatures:
     def find_network_feature(self, instructions: List[str]) -> List[str]:
         URLDomainSet = set()
         ip_pattern = r'^((25[0-5]|(2[0-4]|1\d|[1-9]|)\d)\.?\b){4}$'  # Matches IPv4 addresses
-        url_pattern = r'https?://[^\s/$.?#].[^\s]*'  # Matches full URLs
-
+        # url_pattern = r'https?://([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?:[/:][^\s]*)?'  # fail to diff url ending with .
+        url_pattern = r'https?://([a-zA-Z0-9.-]+\.[a-zA-Z]{2,})(?=[/:\s]|$)'
         for instruction in instructions:
             instruction = instruction.strip()
 
@@ -85,14 +86,21 @@ class SmaliFeatures:
             ip_match = re.findall(ip_pattern, instruction)
             if ip_match:
                 URLDomainSet.update(ip_match)
-
-            # Extract URLs & domains
+            # Extract valid URLs & domains
             url_match = re.findall(url_pattern, instruction)
-            if url_match:
-                domains = [re.sub(r"https?://([^/:]+).*", r"\1", url).strip("\"") for url in url_match]
-                URLDomainSet.update(domains)
+            for domain in url_match:
+                extracted = tldextract.extract(domain)
 
-        return list(URLDomainSet)  # Convert set to list for JSON output
+                # Ensure we ignore malformed domains like "books.google."
+                if extracted.suffix:  # Only process if a valid TLD is found
+                    if extracted.subdomain:  
+                        full_domain = f"{extracted.subdomain}.{extracted.domain}.{extracted.suffix}"
+                    else:
+                        full_domain = f"{extracted.domain}.{extracted.suffix}"
+                    
+                    URLDomainSet.add(full_domain)
+
+        return list(URLDomainSet)
 
     def get_permissions_and_API(self, ApiList: List[Dict], PMap: PScoutMapping, RequestedPermissionList: Set[str]) -> tuple:
         PermissionSet = set()
@@ -272,7 +280,12 @@ def extract_features_from_apk(apk_path: str, apktool_jar: str, result_dir: str) 
 
     for url in SF.network_address:
         output.append(f"URLDomainList_{url}")
-
+    # Cleanup: Remove the decompiled directory
+    try:
+        shutil.rmtree(output_dir)
+        logger.info(f"Removed decompiled directory: {output_dir}")
+    except Exception as e:
+        logger.error(f"Failed to remove decompiled directory {output_dir}: {e}")
     return output
 
 def process_apk(apk_path: str, apktool_jar: str, result_dir: str) -> Optional[str]:
@@ -297,17 +310,28 @@ def process_apk(apk_path: str, apktool_jar: str, result_dir: str) -> Optional[st
 
 def process_apks_in_parallel(apk_dir: str, apktool_jar: str, result_dir: str):
     """Process all APKs in a directory in parallel."""
-    apk_files = [os.path.join(apk_dir, f) for f in os.listdir(apk_dir) if f.endswith(".apk")]
+    # apk_files = [os.path.join(apk_dir, f) for f in os.listdir(apk_dir) if f.endswith(".apk")]
+    apk_files = [
+        os.path.join(apk_dir, f)
+        for f in os.listdir(apk_dir)
+        if f.endswith(".apk") and not os.path.exists(os.path.join(result_dir, os.path.splitext(f)[0] + ".data"))
+    ]
+    # print(apk_files)
     if not apk_files:
-        logger.warning(f"No APK files found in directory: {apk_dir}")
+        logger.warning(f"No new APK files found in directory: {apk_dir}")
         return
 
     # Create output directory if it doesn't exist
     if not os.path.exists(result_dir):
         os.makedirs(result_dir)
 
+    # apk_files = [apk for apk in apk_files if not os.path.exists(os.path.join(result_dir, os.path.splitext(os.path.basename(apk))[0]))]
+
+    if not apk_files:
+        logger.info("All APKs have already been processed.")
+        return
     # Process APKs in parallel
-    with multiprocessing.Pool() as pool:
+    with multiprocessing.Pool(processes=7) as pool:
         results = pool.starmap(process_apk, [(apk, apktool_jar, result_dir) for apk in apk_files])
 
     # Track failed APKs
@@ -321,7 +345,7 @@ def process_apks_in_parallel(apk_dir: str, apktool_jar: str, result_dir: str):
         logger.info(f"Saved list of failed APKs to {os.path.join(FAILED_APKS_FILE)}")
 
 if __name__ == "__main__":
-    # os.system('touch runtime.log') #linux only
+    os.system('touch runtime.log') #linux only
     parser = argparse.ArgumentParser(description="Process APKs to extract features.")
     parser.add_argument("--input_dir", type=str, help="Directory containing APKs")
     parser.add_argument("--result_dir", type=str, help="Directory to save feature outputs")

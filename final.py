@@ -221,7 +221,8 @@ def decompile_apk(apk_path: str, output_dir: str, apktool_jar: str) -> Optional[
 def extract_features_from_apk(apk_path: str, apktool_jar: str, result_dir: str) -> Optional[List[str]]:
     """Extract features from an APK file and format the output as specified"""
     # output_dir = decompile_apk(apk_path, os.path.join(output_dir, os.path.splitext(os.path.basename(apk_path))[0]), apktool_jar)
-    output_dir = decompile_apk(apk_path, f"./decompiled/{os.path.splitext(os.path.basename(apk_path))[0]}", apktool_jar)
+    output_dir = decompile_apk(apk_path, f"/mnt/ramdisk{os.path.splitext(os.path.basename(apk_path))[0]}", apktool_jar)
+    #output_dir = decompile_apk(apk_path, f"./decompiled/{os.path.splitext(os.path.basename(apk_path))[0]}", apktool_jar) #uncomment this to store decompiled code on storage
 
     if not output_dir:
         return None
